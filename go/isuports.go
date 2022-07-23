@@ -1090,32 +1090,49 @@ func competitionScoreHandler(c echo.Context) error {
 		})
 	}
 
-	tx, err := db.Beginx()
-	if err != nil {
-		return err
-	}
+	run := func() error {
+		tx, err := db.Beginx()
+		if err != nil {
+			return err
+		}
 
-	if _, err := tx.ExecContext(
-		ctx,
-		"DELETE FROM player_score WHERE tenant_id = ? AND competition_id = ?",
-		v.tenantID,
-		competitionID,
-	); err != nil {
-		return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
-	}
+		if _, err := tx.ExecContext(
+			ctx,
+			"DELETE FROM player_score WHERE tenant_id = ? AND competition_id = ?",
+			v.tenantID,
+			competitionID,
+		); err != nil {
+			return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
+		}
 
-	if _, err := tx.NamedExecContext(
-		ctx,
-		"INSERT INTO player_score (id, tenant_id, player_id, competition_id, score, row_num, created_at, updated_at) VALUES (:id, :tenant_id, :player_id, :competition_id, :score, :row_num, :created_at, :updated_at)",
-		playerScoreRows,
-	); err != nil {
-		return fmt.Errorf(
-			"error Insert player_score:s: %w", err,
-		)
-	}
+		if _, err := tx.NamedExecContext(
+			ctx,
+			"INSERT INTO player_score (id, tenant_id, player_id, competition_id, score, row_num, created_at, updated_at) VALUES (:id, :tenant_id, :player_id, :competition_id, :score, :row_num, :created_at, :updated_at)",
+			playerScoreRows,
+		); err != nil {
+			return fmt.Errorf(
+				"error Insert player_score:s: %w", err,
+			)
+		}
 
-	if err := tx.Commit(); err != nil {
-		return err
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		return nil
+	}
+	for i := 0; i < 10; i++ {
+		err := run()
+		if err == nil {
+			break
+		}
+		if merr, ok := err.(*mysql.MySQLError); ok && merr.Number == 1213 {
+			time.Sleep(50 * time.Millisecond)
+			log.Warnf("Dead Lock")
+			continue
+		}
+		if i == 2 {
+			return err
+		}
 	}
 	return c.JSON(http.StatusOK, SuccessResult{
 		Status: true,
