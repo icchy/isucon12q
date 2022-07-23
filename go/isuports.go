@@ -163,7 +163,8 @@ func Run() {
 		e.Logger.Fatalf("failed to connect db: %v", err)
 		return
 	}
-	db.SetMaxOpenConns(50)
+	db.SetMaxOpenConns(100)
+	db.SetMaxIdleConns(100)
 	db.SetConnMaxLifetime(time.Minute * 10)
 	defer db.Close()
 
@@ -387,13 +388,10 @@ func retrieveCompetition(ctx context.Context, db dbOrTx, tenantID int64, id stri
 
 type PlayerScoreRow struct {
 	TenantID      int64  `db:"tenant_id"`
-	ID            string `db:"id"`
 	PlayerID      string `db:"player_id"`
 	CompetitionID string `db:"competition_id"`
 	Score         int64  `db:"score"`
-	RowNum        int64  `db:"row_num"`
 	CreatedAt     int64  `db:"created_at"`
-	UpdatedAt     int64  `db:"updated_at"`
 }
 
 // 排他ロックのためのファイル名を生成する
@@ -804,13 +802,15 @@ func playersAddHandler(c echo.Context) error {
 		})
 	}
 
-	if _, err := db.NamedExec(
-		"INSERT INTO player (id, tenant_id, display_name, is_disqualified, created_at, updated_at) VALUES (:id, :tenant_id, :display_name, :is_disqualified, :created_at, :updated_at)", adds,
-	); err != nil {
-		return fmt.Errorf(
-			"error Insert player at tenantDB: %w",
-			err,
-		)
+	if len(adds) > 0 {
+		if _, err := db.NamedExec(
+			"INSERT INTO player (id, tenant_id, display_name, is_disqualified, created_at, updated_at) VALUES (:id, :tenant_id, :display_name, :is_disqualified, :created_at, :updated_at)", adds,
+		); err != nil {
+			return fmt.Errorf(
+				"error Insert player at tenantDB: %w",
+				err,
+			)
+		}
 	}
 	res := PlayersAddHandlerResult{
 		Players: pds,
@@ -1041,16 +1041,16 @@ func competitionScoreHandler(c echo.Context) error {
 	//	return fmt.Errorf("error flockByTenantID: %w", err)
 	//}
 	//defer fl.Close()
-	var rowNum int64
 	playerScoreRows := []PlayerScoreRow{}
 
 	var playerIds []string
 	if err := db.Select(&playerIds, "SELECT id FROM player where tenant_id = ?", v.tenantID); err != nil {
 		return fmt.Errorf("error Select player: tenant_id=%d, %w", v.tenantID, err)
 	}
+	now := time.Now().Unix()
+	rowCount := 0
 
 	for {
-		rowNum++
 		row, err := r.Read()
 		if err != nil {
 			if err == io.EOF {
@@ -1083,21 +1083,24 @@ func competitionScoreHandler(c echo.Context) error {
 				fmt.Sprintf("error strconv.ParseUint: scoreStr=%s, %s", scoreStr, err),
 			)
 		}
-		id, err := dispenseID(ctx)
-		if err != nil {
-			return fmt.Errorf("error dispenseID: %w", err)
+		found := false
+		for i := range playerScoreRows {
+			if playerScoreRows[i].PlayerID == playerID {
+				playerScoreRows[i].Score = score
+				found = true
+				break
+			}
 		}
-		now := time.Now().Unix()
-		playerScoreRows = append(playerScoreRows, PlayerScoreRow{
-			ID:            id,
-			TenantID:      v.tenantID,
-			PlayerID:      playerID,
-			CompetitionID: competitionID,
-			Score:         score,
-			RowNum:        rowNum,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		})
+		if !found {
+			playerScoreRows = append(playerScoreRows, PlayerScoreRow{
+				TenantID:      v.tenantID,
+				PlayerID:      playerID,
+				CompetitionID: competitionID,
+				Score:         score,
+				CreatedAt:     now,
+			})
+		}
+		rowCount += 1
 	}
 
 	run := func() error {
@@ -1105,7 +1108,7 @@ func competitionScoreHandler(c echo.Context) error {
 		if err != nil {
 			return err
 		}
-
+		defer tx.Rollback()
 		if _, err := tx.ExecContext(
 			ctx,
 			"DELETE FROM player_score WHERE tenant_id = ? AND competition_id = ?",
@@ -1115,14 +1118,17 @@ func competitionScoreHandler(c echo.Context) error {
 			return fmt.Errorf("error Delete player_score: tenantID=%d, competitionID=%s, %w", v.tenantID, competitionID, err)
 		}
 
-		if _, err := tx.NamedExecContext(
-			ctx,
-			"INSERT INTO player_score (id, tenant_id, player_id, competition_id, score, row_num, created_at, updated_at) VALUES (:id, :tenant_id, :player_id, :competition_id, :score, :row_num, :created_at, :updated_at)",
-			playerScoreRows,
-		); err != nil {
-			return fmt.Errorf(
-				"error Insert player_score:s: %w", err,
-			)
+		if len(playerScoreRows) > 0 {
+			if _, err := tx.NamedExecContext(
+				ctx,
+				"INSERT INTO player_score (tenant_id, player_id, competition_id, score, created_at) VALUES (:tenant_id, :player_id, :competition_id, :score, :created_at)",
+				playerScoreRows,
+			); err != nil {
+				log.Printf("%+v", playerScoreRows)
+				return fmt.Errorf(
+					"error Insert player_score:s: %w", err,
+				)
+			}
 		}
 
 		if err := tx.Commit(); err != nil {
@@ -1146,7 +1152,7 @@ func competitionScoreHandler(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, SuccessResult{
 		Status: true,
-		Data:   ScoreHandlerResult{Rows: int64(len(playerScoreRows))},
+		Data:   ScoreHandlerResult{Rows: int64(rowCount)},
 	})
 }
 
@@ -1249,13 +1255,12 @@ func playerHandler(c echo.Context) error {
 		CompetitionID string `db:"competition_id"`
 		Title         string `db:"title"`
 		Score         int64  `db:"score"`
-		RowNum        int64  `db:"row_num"`
 	}{}
 
 	if err := db.SelectContext(
 		ctx,
 		&cs,
-		"SELECT competition.id as competition_id, competition.title, player_score.score, row_num FROM competition JOIN player_score ON player_score.competition_id = competition.id WHERE player_score.tenant_id = ? AND competition.tenant_id = ? AND player_score.player_id = ? ORDER BY competition.id, row_num DESC",
+		"SELECT competition.id as competition_id, competition.title, player_score.score FROM competition JOIN player_score ON player_score.competition_id = competition.id WHERE player_score.tenant_id = ? AND competition.tenant_id = ? AND player_score.player_id = ? ORDER BY competition.id DESC",
 		v.tenantID,
 		v.tenantID,
 		p.ID,
@@ -1387,9 +1392,9 @@ func competitionRankingHandler(c echo.Context) error {
 	if err := db.SelectContext(
 		ctx,
 		&rows,
-		"SELECT score, row_num, player.id AS player_id, display_name FROM player_score "+
+		"SELECT score, player.id AS player_id, display_name FROM player_score "+
 			"INNER JOIN player ON player_score.player_id=player.id "+
-			"WHERE player_score.tenant_id = ? AND player_score.competition_id= ? ORDER BY row_num DESC",
+			"WHERE player_score.tenant_id = ? AND player_score.competition_id= ?",
 		tenant.ID,
 		competitionID,
 	); err != nil {
