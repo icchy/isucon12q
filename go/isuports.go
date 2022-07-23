@@ -66,6 +66,7 @@ func connectAdminDB() (*sqlx.DB, error) {
 	config.Passwd = getEnv("ISUCON_DB_PASSWORD", "isucon")
 	config.DBName = getEnv("ISUCON_DB_NAME", "isuports")
 	config.ParseTime = true
+	config.InterpolateParams = true
 	dsn := config.FormatDSN()
 	return sqlx.Open("mysql", dsn)
 }
@@ -162,7 +163,8 @@ func Run() {
 		e.Logger.Fatalf("failed to connect db: %v", err)
 		return
 	}
-	db.SetMaxOpenConns(10)
+	db.SetMaxOpenConns(50)
+	db.SetConnMaxLifetime(time.Minute * 10)
 	defer db.Close()
 
 	port := getEnv("SERVER_APP_PORT", "3000")
@@ -1034,11 +1036,11 @@ func competitionScoreHandler(c echo.Context) error {
 	}
 
 	// / DELETEしたタイミングで参照が来ると空っぽのランキングになるのでロックする
-	fl, err := flockByTenantID(v.tenantID)
-	if err != nil {
-		return fmt.Errorf("error flockByTenantID: %w", err)
-	}
-	defer fl.Close()
+	//fl, err := flockByTenantID(v.tenantID)
+	//if err != nil {
+	//	return fmt.Errorf("error flockByTenantID: %w", err)
+	//}
+	//defer fl.Close()
 	var rowNum int64
 	playerScoreRows := []PlayerScoreRow{}
 
@@ -1352,12 +1354,12 @@ func competitionRankingHandler(c echo.Context) error {
 		}
 	}
 
-	// player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
-	fl, err := flockByTenantID(v.tenantID)
-	if err != nil {
-		return fmt.Errorf("error flockByTenantID: %w", err)
-	}
-	defer fl.Close()
+	//// player_scoreを読んでいるときに更新が走ると不整合が起こるのでロックを取得する
+	//fl, err := flockByTenantID(v.tenantID)
+	//if err != nil {
+	//	return fmt.Errorf("error flockByTenantID: %w", err)
+	//}
+	//defer fl.Close()
 
 	var rows []struct {
 		Score             int64  `db:"score"`
