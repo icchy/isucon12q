@@ -1343,34 +1343,39 @@ func competitionRankingHandler(c echo.Context) error {
 		return fmt.Errorf("error flockByTenantID: %w", err)
 	}
 	defer fl.Close()
-	pss := []PlayerScoreRow{}
+
+	var rows []struct {
+		Score             int64  `db:"score"`
+		PlayerID          string `db:"player_id"`
+		PlayerDisplayName string `db:"display_name"`
+		RowNum            int64  `db:"row_num"`
+	}
 	if err := db.SelectContext(
 		ctx,
-		&pss,
-		"SELECT * FROM player_score WHERE tenant_id = ? AND competition_id = ? ORDER BY row_num DESC",
+		&rows,
+		"SELECT score, row_num, player.id AS player_id, display_name FROM player_score "+
+			"INNER JOIN player ON player_score.player_id=player.id "+
+			"WHERE player_score.tenant_id = ? AND player_score.competition_id= ? ORDER BY row_num DESC",
 		tenant.ID,
 		competitionID,
 	); err != nil {
-		return fmt.Errorf("error Select player_score: tenantID=%d, competitionID=%s, %w", tenant.ID, competitionID, err)
+		return fmt.Errorf("error Select player_score with player: tenantID=%d, competitionID=%s, %w", tenant.ID, competitionID, err)
 	}
-	ranks := make([]CompetitionRank, 0, len(pss))
-	scoredPlayerSet := make(map[string]struct{}, len(pss))
-	for _, ps := range pss {
+	ranks := make([]CompetitionRank, 0, len(rows))
+	scoredPlayerSet := make(map[string]struct{}, len(rows))
+
+	for _, r := range rows {
 		// player_scoreが同一player_id内ではrow_numの降順でソートされているので
 		// 現れたのが2回目以降のplayer_idはより大きいrow_numでスコアが出ているとみなせる
-		if _, ok := scoredPlayerSet[ps.PlayerID]; ok {
+		if _, ok := scoredPlayerSet[r.PlayerID]; ok {
 			continue
 		}
-		scoredPlayerSet[ps.PlayerID] = struct{}{}
-		p, err := retrievePlayer(ctx, db, v.tenantID, ps.PlayerID)
-		if err != nil {
-			return fmt.Errorf("error retrievePlayer: %w", err)
-		}
+		scoredPlayerSet[r.PlayerID] = struct{}{}
 		ranks = append(ranks, CompetitionRank{
-			Score:             ps.Score,
-			PlayerID:          p.ID,
-			PlayerDisplayName: p.DisplayName,
-			RowNum:            ps.RowNum,
+			Score:             r.Score,
+			PlayerID:          r.PlayerID,
+			PlayerDisplayName: r.PlayerDisplayName,
+			RowNum:            r.RowNum,
 		})
 	}
 	sort.Slice(ranks, func(i, j int) bool {
