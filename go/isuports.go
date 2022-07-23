@@ -108,24 +108,22 @@ func SetCacheControlPrivate(next echo.HandlerFunc) echo.HandlerFunc {
 // Run は cmd/isuports/main.go から呼ばれるエントリーポイントです
 func Run() {
 	e := echo.New()
-	e.Debug = true
-	e.Logger.SetLevel(log.DEBUG)
+	e.Logger.SetLevel(log.WARN)
 
 	var (
-		sqlLogger io.Closer
-		err       error
+		//sqlLogger io.Closer
+		err error
 	)
-	// sqliteのクエリログを出力する設定
-	// 環境変数 ISUCON_SQLITE_TRACE_FILE を設定すると、そのファイルにクエリログをJSON形式で出力する
-	// 未設定なら出力しない
-	// sqltrace.go を参照
-	sqliteDriverName, sqlLogger, err = initializeSQLLogger()
-	if err != nil {
-		e.Logger.Panicf("error initializeSQLLogger: %s", err)
-	}
-	defer sqlLogger.Close()
+	//// sqliteのクエリログを出力する設定
+	//// 環境変数 ISUCON_SQLITE_TRACE_FILE を設定すると、そのファイルにクエリログをJSON形式で出力する
+	//// 未設定なら出力しない
+	//// sqltrace.go を参照
+	//sqliteDriverName, sqlLogger, err = initializeSQLLogger()
+	//if err != nil {
+	//	e.Logger.Panicf("error initializeSQLLogger: %s", err)
+	//}
+	//defer sqlLogger.Close()
 
-	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
 	e.Use(SetCacheControlPrivate)
 
@@ -1124,7 +1122,6 @@ func competitionScoreHandler(c echo.Context) error {
 				"INSERT INTO player_score (tenant_id, player_id, competition_id, score, created_at) VALUES (:tenant_id, :player_id, :competition_id, :score, :created_at)",
 				playerScoreRows,
 			); err != nil {
-				log.Printf("%+v", playerScoreRows)
 				return fmt.Errorf(
 					"error Insert player_score:s: %w", err,
 				)
