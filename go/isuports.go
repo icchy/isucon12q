@@ -6,7 +6,9 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"github.com/oklog/ulid/v2"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -47,6 +49,8 @@ var (
 	db *sqlx.DB
 
 	sqliteDriverName = "sqlite3"
+
+	entropy = ulid.Monotonic(rand.New(rand.NewSource(time.Now().UnixNano())), 0)
 )
 
 // 環境変数を取得する、なければデフォルト値を返す
@@ -73,28 +77,8 @@ func connectAdminDB() (*sqlx.DB, error) {
 
 // システム全体で一意なIDを生成する
 func dispenseID(ctx context.Context) (string, error) {
-	var id int64
-	var lastErr error
-	for i := 0; i < 100; i++ {
-		var ret sql.Result
-		ret, err := db.ExecContext(ctx, "REPLACE INTO id_generator (stub) VALUES (?);", "a")
-		if err != nil {
-			if merr, ok := err.(*mysql.MySQLError); ok && merr.Number == 1213 { // deadlock
-				lastErr = fmt.Errorf("error REPLACE INTO id_generator: %w", err)
-				continue
-			}
-			return "", fmt.Errorf("error REPLACE INTO id_generator: %w", err)
-		}
-		id, err = ret.LastInsertId()
-		if err != nil {
-			return "", fmt.Errorf("error ret.LastInsertId: %w", err)
-		}
-		break
-	}
-	if id != 0 {
-		return fmt.Sprintf("%x", id), nil
-	}
-	return "", lastErr
+	id := ulid.MustNew(ulid.Timestamp(time.Now()), entropy)
+	return id.String(), nil
 }
 
 // 全APIにCache-Control: privateを設定する
