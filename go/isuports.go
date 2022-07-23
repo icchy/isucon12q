@@ -29,6 +29,7 @@ import (
 	"github.com/labstack/gommon/log"
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/oklog/ulid/v2"
 )
 
 const (
@@ -95,7 +96,7 @@ func connectAdminDB() (*sqlx.DB, error) {
 // システム全体で一意なIDを生成する
 func dispenseID(ctx context.Context) (string, error) {
 	id := ulid.MustNew(ulid.Timestamp(time.Now()), entropy)
-	return id.String(), nil
+	return fmt.Sprintf("%x", id.Bytes()), nil
 }
 
 // 全APIにCache-Control: privateを設定する
